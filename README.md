@@ -259,6 +259,71 @@ leaderboard-redis/
 └── README.md                 # This file
 ```
 
+## WebSocket Real-time Updates
+
+The server supports WebSocket connections for real-time leaderboard updates.
+
+### WebSocket Endpoint
+
+```
+ws://localhost:8080/ws
+```
+
+### Subscribe to Updates
+
+```json
+{"type": "subscribe", "leaderboard_id": "game1"}
+```
+
+### Receive Updates
+
+```json
+{
+  "type": "leaderboard_update",
+  "leaderboard_id": "game1",
+  "data": {
+    "entries": [{"rank": 1, "player_id": "player1", "score": 5000}, ...],
+    "total_players": 1000
+  }
+}
+```
+
+## React Frontend
+
+A React frontend is included in the `webapp/` directory:
+
+```bash
+cd webapp
+npm install
+npm run dev -- --port 3000
+```
+
+Features:
+- Real-time leaderboard display
+- Top 3 podium with medals
+- Live connection indicator
+- Rank change animations
+- Auto-reconnect on disconnect
+
+## Real-time Demo
+
+For a complete demo with 1000 players and live updates, see:
+
+📖 **[docs/REALTIME_DEMO.md](docs/REALTIME_DEMO.md)**
+
+Quick start:
+```bash
+# Start everything
+docker-compose up -d redis postgres
+go run ./cmd/server -config config.yaml &
+cd webapp && npm run dev -- --port 3000 &
+
+# Run battle royale demo (1000 players, constant changes)
+./scripts/battle-royale.sh
+
+# Open http://localhost:3000 and watch!
+```
+
 ## Performance Considerations
 
 1. **Connection Pooling**: Both Redis and PostgreSQL use connection pools

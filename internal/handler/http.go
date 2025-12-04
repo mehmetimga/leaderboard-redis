@@ -10,18 +10,21 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/leaderboard-redis/internal/domain"
 	"github.com/leaderboard-redis/internal/service"
+	"github.com/leaderboard-redis/internal/websocket"
 )
 
 // Handler provides HTTP handlers for the leaderboard API
 type Handler struct {
 	service *service.LeaderboardService
+	hub     *websocket.Hub
 	logger  *slog.Logger
 }
 
 // NewHandler creates a new HTTP handler
-func NewHandler(service *service.LeaderboardService, logger *slog.Logger) *Handler {
+func NewHandler(service *service.LeaderboardService, hub *websocket.Hub, logger *slog.Logger) *Handler {
 	return &Handler{
 		service: service,
+		hub:     hub,
 		logger:  logger,
 	}
 }
@@ -49,6 +52,9 @@ func (h *Handler) Router() http.Handler {
 	r.Get("/health", h.HealthCheck)
 	r.Get("/ready", h.ReadyCheck)
 
+	// WebSocket endpoint
+	r.Get("/ws", h.HandleWebSocket)
+
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
 		// Score operations
@@ -74,6 +80,9 @@ func (h *Handler) Router() http.Handler {
 				r.Delete("/player/{playerID}", h.RemovePlayer)
 			})
 		})
+
+		// WebSocket info endpoint
+		r.Get("/ws/stats", h.GetWebSocketStats)
 	})
 
 	return r
@@ -115,6 +124,18 @@ func (h *Handler) writeError(w http.ResponseWriter, status int, err error) {
 	h.writeJSON(w, status, APIResponse{
 		Success: false,
 		Error:   err.Error(),
+	})
+}
+
+// HandleWebSocket handles WebSocket upgrade requests
+func (h *Handler) HandleWebSocket(w http.ResponseWriter, r *http.Request) {
+	websocket.ServeWs(h.hub, h.logger, w, r)
+}
+
+// GetWebSocketStats returns WebSocket connection statistics
+func (h *Handler) GetWebSocketStats(w http.ResponseWriter, r *http.Request) {
+	h.writeSuccess(w, map[string]interface{}{
+		"total_connections": h.hub.GetTotalConnections(),
 	})
 }
 
@@ -432,4 +453,3 @@ func (h *Handler) RemovePlayer(w http.ResponseWriter, r *http.Request) {
 
 	h.writeSuccess(w, map[string]string{"status": "removed"})
 }
-

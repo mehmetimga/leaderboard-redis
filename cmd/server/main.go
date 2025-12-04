@@ -16,6 +16,7 @@ import (
 	"github.com/leaderboard-redis/internal/postgres"
 	"github.com/leaderboard-redis/internal/redis"
 	"github.com/leaderboard-redis/internal/service"
+	"github.com/leaderboard-redis/internal/websocket"
 	"github.com/leaderboard-redis/internal/worker"
 )
 
@@ -67,6 +68,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize WebSocket hub
+	wsHub := websocket.NewHub(logger)
+	go wsHub.Run()
+	logger.Info("WebSocket hub initialized")
+
 	// Initialize services
 	leaderboardService := service.NewLeaderboardService(
 		redisService,
@@ -74,6 +80,9 @@ func main() {
 		&cfg.Leaderboard,
 		logger,
 	)
+
+	// Set the WebSocket hub on the service for broadcasting
+	leaderboardService.SetHub(wsHub)
 
 	// Initialize sync worker
 	syncWorker := worker.NewSyncWorker(
@@ -97,8 +106,8 @@ func main() {
 		}
 	}
 
-	// Initialize HTTP handler
-	httpHandler := handler.NewHandler(leaderboardService, logger)
+	// Initialize HTTP handler with WebSocket hub
+	httpHandler := handler.NewHandler(leaderboardService, wsHub, logger)
 
 	// Create HTTP server
 	server := &http.Server{
@@ -112,6 +121,7 @@ func main() {
 	// Start server in goroutine
 	go func() {
 		logger.Info("starting HTTP server", "port", cfg.Server.Port)
+		logger.Info("WebSocket endpoint available at /ws")
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("HTTP server error", "error", err)
 			os.Exit(1)
@@ -129,6 +139,9 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 
+	// Stop WebSocket hub
+	wsHub.Stop()
+
 	// Stop sync worker
 	if err := syncWorker.Stop(); err != nil {
 		logger.Error("failed to stop sync worker", "error", err)
@@ -141,4 +154,3 @@ func main() {
 
 	logger.Info("server stopped")
 }
-

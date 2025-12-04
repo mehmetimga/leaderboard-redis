@@ -10,6 +10,7 @@ import (
 	"github.com/leaderboard-redis/internal/domain"
 	"github.com/leaderboard-redis/internal/postgres"
 	"github.com/leaderboard-redis/internal/redis"
+	"github.com/leaderboard-redis/internal/websocket"
 )
 
 // LeaderboardService provides business logic for leaderboard operations
@@ -18,6 +19,7 @@ type LeaderboardService struct {
 	postgres *postgres.Repository
 	config   *config.LeaderboardConfig
 	logger   *slog.Logger
+	hub      *websocket.Hub
 }
 
 // NewLeaderboardService creates a new leaderboard service
@@ -33,6 +35,28 @@ func NewLeaderboardService(
 		config:   cfg,
 		logger:   logger,
 	}
+}
+
+// SetHub sets the WebSocket hub for broadcasting updates
+func (s *LeaderboardService) SetHub(hub *websocket.Hub) {
+	s.hub = hub
+}
+
+// broadcastUpdate broadcasts leaderboard update to WebSocket clients
+func (s *LeaderboardService) broadcastUpdate(ctx context.Context, leaderboardID string) {
+	if s.hub == nil {
+		return
+	}
+
+	// Get only top 10 entries for broadcast (efficient for large leaderboards)
+	entries, err := s.redis.GetTopN(ctx, leaderboardID, 10)
+	if err != nil {
+		s.logger.Warn("failed to get entries for broadcast", "error", err)
+		return
+	}
+
+	count, _ := s.redis.GetCount(ctx, leaderboardID)
+	s.hub.BroadcastLeaderboardUpdate(leaderboardID, entries, count)
 }
 
 // SubmitScore submits a score for a player
@@ -79,21 +103,81 @@ func (s *LeaderboardService) SubmitScore(ctx context.Context, submission domain.
 		// Don't fail the request if event recording fails
 	}
 
+	// Broadcast update to WebSocket clients
+	s.broadcastUpdate(ctx, submission.LeaderboardID)
+
 	return nil
 }
 
 // SubmitScoreBatch submits multiple scores
 func (s *LeaderboardService) SubmitScoreBatch(ctx context.Context, batch domain.BatchScoreSubmission) error {
+	// Track which leaderboards were updated
+	updatedLeaderboards := make(map[string]bool)
+
 	for _, submission := range batch.Scores {
-		if err := s.SubmitScore(ctx, submission); err != nil {
+		if err := s.submitScoreWithoutBroadcast(ctx, submission); err != nil {
 			s.logger.Error("failed to submit score in batch",
 				"player_id", submission.PlayerID,
 				"leaderboard_id", submission.LeaderboardID,
 				"error", err,
 			)
 			// Continue processing other scores
+		} else {
+			updatedLeaderboards[submission.LeaderboardID] = true
 		}
 	}
+
+	// Broadcast updates for all affected leaderboards
+	for leaderboardID := range updatedLeaderboards {
+		s.broadcastUpdate(ctx, leaderboardID)
+	}
+
+	return nil
+}
+
+// submitScoreWithoutBroadcast submits a score without broadcasting (for batch operations)
+func (s *LeaderboardService) submitScoreWithoutBroadcast(ctx context.Context, submission domain.ScoreSubmission) error {
+	// Get leaderboard config
+	lbConfig, err := s.postgres.GetLeaderboard(ctx, submission.LeaderboardID)
+	if err != nil {
+		return fmt.Errorf("getting leaderboard config: %w", err)
+	}
+
+	// Apply score based on update mode
+	switch lbConfig.UpdateMode {
+	case domain.UpdateModeReplace:
+		if err := s.redis.SetScore(ctx, submission.LeaderboardID, submission.PlayerID, submission.Score); err != nil {
+			return fmt.Errorf("setting score in redis: %w", err)
+		}
+	case domain.UpdateModeIncrement:
+		if _, err := s.redis.IncrementScore(ctx, submission.LeaderboardID, submission.PlayerID, submission.Score); err != nil {
+			return fmt.Errorf("incrementing score in redis: %w", err)
+		}
+	case domain.UpdateModeBest:
+		higherIsBetter := lbConfig.SortOrder == domain.SortOrderDesc
+		if _, err := s.redis.SetScoreIfBetter(ctx, submission.LeaderboardID, submission.PlayerID, submission.Score, higherIsBetter); err != nil {
+			return fmt.Errorf("setting best score in redis: %w", err)
+		}
+	default:
+		if err := s.redis.SetScore(ctx, submission.LeaderboardID, submission.PlayerID, submission.Score); err != nil {
+			return fmt.Errorf("setting score in redis: %w", err)
+		}
+	}
+
+	// Record the event in PostgreSQL
+	event := domain.ScoreEvent{
+		PlayerID:      submission.PlayerID,
+		LeaderboardID: submission.LeaderboardID,
+		Score:         submission.Score,
+		GameID:        submission.GameID,
+		EventType:     "submit",
+		Timestamp:     time.Now(),
+		Metadata:      submission.Metadata,
+	}
+	if err := s.postgres.RecordEvent(ctx, event); err != nil {
+		s.logger.Warn("failed to record score event", "error", err)
+	}
+
 	return nil
 }
 
@@ -178,6 +262,9 @@ func (s *LeaderboardService) RemovePlayer(ctx context.Context, leaderboardID, pl
 		s.logger.Warn("failed to remove player from postgres", "error", err)
 	}
 
+	// Broadcast update
+	s.broadcastUpdate(ctx, leaderboardID)
+
 	return nil
 }
 
@@ -259,6 +346,9 @@ func (s *LeaderboardService) ResetLeaderboard(ctx context.Context, leaderboardID
 		return fmt.Errorf("resetting leaderboard in postgres: %w", err)
 	}
 
+	// Broadcast update
+	s.broadcastUpdate(ctx, leaderboardID)
+
 	return nil
 }
 
@@ -288,4 +378,3 @@ func (s *LeaderboardService) GetStats(ctx context.Context, leaderboardID string)
 
 	return stats, nil
 }
-
