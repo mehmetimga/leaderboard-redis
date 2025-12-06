@@ -439,6 +439,19 @@ Features:
 - Rank change animations
 - Auto-reconnect on disconnect
 
+## Makefile Commands
+
+All operations can be done via Makefile. See full documentation: **[docs/MAKEFILE_COMMANDS.md](docs/MAKEFILE_COMMANDS.md)**
+
+```bash
+make run                # Start everything (docker + server + webapp)
+make feed               # Feed 1000 players via Kafka
+make stop               # Stop everything
+make test-health        # Check all services health
+make status             # Show service status
+make logs               # View server logs
+```
+
 ## Real-time Demo
 
 For a complete demo with 1000 players and live updates, see:
