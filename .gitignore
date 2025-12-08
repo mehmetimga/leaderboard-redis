@@ -1,0 +1,77 @@
+# Binaries
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build output
+dist/
+build/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool
+*.out
+coverage.html
+
+# Go workspace file
+go.work
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+/tmp/
+logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Node modules (webapp)
+node_modules/
+
+# Webapp build
+webapp/dist/
+webapp/build/
+
+# Local config overrides
+config.local.yaml
+config.*.local.yaml
+
+# Debug files
+debug
+__debug_bin
+
+# Air live reload
+tmp/
+
+# Kafka data (local)
+kafka-data/
+zookeeper-data/

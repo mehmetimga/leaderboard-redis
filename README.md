@@ -3,43 +3,79 @@
 A real-time leaderboard application built in Go with dual data paths:
 - **Real-time path**: Instant updates with eventual consistency (Redis)
 - **Batch path**: 30-minute delayed updates with full accuracy (PostgreSQL)
+- **High-load ingestion**: Kafka for handling high-volume score submissions
 
 ## Architecture
 
 ```
-┌─────────────┐     ┌─────────────────────────────────────┐
-│   Client    │────►│           Go API Server             │
-└─────────────┘     └──────────────┬──────────────────────┘
-                                   │
-                    ┌──────────────┴──────────────┐
-                    ▼                             ▼
-          ┌─────────────────┐           ┌─────────────────┐
-          │     Redis       │           │   PostgreSQL    │
-          │  (Real-time)    │           │    (Batch)      │
-          │  Sorted Sets    │           │   Source of     │
-          │                 │           │     Truth       │
-          └─────────────────┘           └─────────────────┘
-                    ▲                             │
-                    │         ┌───────────┐       │
-                    └─────────│  Worker   │◄──────┘
-                              │ (30 min)  │
-                              └───────────┘
+                                 HIGH-LOAD DATA INGESTION PATH
+                         ┌──────────────────────────────────────────────────┐
+                         │                                                  │
+┌─────────────────┐      │    ┌─────────────┐     ┌─────────────────────┐  │
+│  Game Servers / │──────┼───►│    Kafka    │────►│   Kafka Consumer    │  │
+│  Score Producer │      │    │   (Queue)   │     │  (Batch Processing) │  │
+└─────────────────┘      │    └─────────────┘     └──────────┬──────────┘  │
+                         │                                   │             │
+                         └───────────────────────────────────┼─────────────┘
+                                                             │
+                              LEADERBOARD SERVICE            │
+                    ┌────────────────────────────────────────┼────────────────┐
+                    │                                        ▼                │
+                    │     ┌─────────────────────────────────────────────┐     │
+                    │     │              Leaderboard Service            │     │
+                    │     │         (Score Processing + Ranking)        │     │
+                    │     └─────────────────────────────────────────────┘     │
+                    │                   │                     │               │
+                    │                   ▼                     ▼               │
+                    │     ┌─────────────────────┐  ┌─────────────────────┐   │
+                    │     │       Redis         │  │     PostgreSQL      │   │
+                    │     │    (Real-time)      │  │      (Batch)        │   │
+                    │     │    Sorted Sets      │  │   Source of Truth   │   │
+                    │     └─────────────────────┘  └─────────────────────┘   │
+                    │                   ▲                     │               │
+                    │                   │    ┌───────────┐    │               │
+                    │                   └────│  Worker   │◄───┘               │
+                    │                        │ (30 min)  │                    │
+                    │                        └───────────┘                    │
+                    └─────────────────────────────────────────────────────────┘
+                                                ▲
+                              WEB CLIENT PATH   │ (Direct, No Kafka)
+                    ┌───────────────────────────┴───────────────────────────┐
+                    │                                                       │
+┌─────────────────┐ │     ┌─────────────────────────────────────────────┐  │
+│   Web Client    │◄┼────►│              WebSocket Hub                  │  │
+│  (Browser/App)  │ │     │   (Real-time Leaderboard Updates)          │  │
+└─────────────────┘ │     └─────────────────────────────────────────────┘  │
+                    │                                                       │
+                    └───────────────────────────────────────────────────────┘
 ```
+
+### Data Flow Paths
+
+1. **High-Load Ingestion (via Kafka)**:
+   - Game servers → Kafka → Consumer → Leaderboard Service → Redis + PostgreSQL
+   - Best for: High-volume score submissions, batch processing, decoupling producers from consumers
+
+2. **Web Client Path (Direct)**:
+   - Web Client ↔ WebSocket ↔ Leaderboard Service ↔ Redis
+   - Best for: Real-time leaderboard display, instant updates, low latency queries
 
 ## Tech Stack
 
-- **Language**: Go 1.21+
+- **Language**: Go 1.23+
 - **Real-time Store**: Redis 7+ (Sorted Sets)
 - **Persistent Store**: PostgreSQL 15+
+- **Message Queue**: Apache Kafka (for high-load ingestion)
 - **HTTP Router**: Chi v5
 - **Database Driver**: pgx v5
+- **Kafka Client**: IBM Sarama
 
 ## Quick Start
 
 ### Using Docker Compose (Recommended)
 
 ```bash
-# Start all services (Redis, PostgreSQL, and the server)
+# Start all services (Redis, PostgreSQL, Kafka, and the server)
 docker-compose up -d
 
 # View logs
@@ -51,10 +87,13 @@ docker-compose down
 
 ### Local Development
 
-1. **Start Redis and PostgreSQL**:
+1. **Start Redis, PostgreSQL, and Kafka**:
 ```bash
-# Start only Redis and PostgreSQL
-docker-compose up -d redis postgres
+# Start infrastructure services
+docker-compose up -d redis postgres kafka
+
+# Wait for Kafka to be healthy
+docker-compose logs -f kafka
 ```
 
 2. **Build and run the server**:
@@ -70,6 +109,15 @@ go run ./cmd/server -config config.yaml
 ```bash
 go build -o leaderboard-server ./cmd/server
 ./leaderboard-server -config config.yaml
+```
+
+4. **Feed data via Kafka (high-load testing)**:
+```bash
+# Build the Kafka producer
+go build -o bin/kafka-producer ./cmd/kafka-producer
+
+# Feed scores through Kafka
+./bin/kafka-producer -leaderboard game1 -players 1000 -rate 100
 ```
 
 ## API Endpoints
@@ -207,6 +255,17 @@ postgres:
   database: "leaderboard"
   max_connections: 50
 
+kafka:
+  brokers:
+    - "localhost:9092"
+  topic: "leaderboard-scores"
+  group_id: "leaderboard-consumer"
+  enabled: true              # Enable/disable Kafka consumer
+  batch_size: 100            # Batch size for processing
+  batch_timeout: 1s          # Max time to wait for batch
+  retry_attempts: 3          # Retry attempts on failure
+  retry_delay: 1s            # Delay between retries
+
 sync:
   interval: 30m      # Sync interval
   batch_size: 1000   # Batch size for sync operations
@@ -227,14 +286,80 @@ leaderboard:
 | `POSTGRES_USER` | PostgreSQL user | `leaderboard` |
 | `POSTGRES_PASSWORD` | PostgreSQL password | `secret` |
 | `POSTGRES_DB` | PostgreSQL database | `leaderboard` |
+| `KAFKA_BROKERS` | Kafka brokers (comma-separated) | `localhost:9092` |
+| `KAFKA_ENABLED` | Enable Kafka consumer | `true` |
+
+## Kafka High-Load Data Ingestion
+
+For high-load scenarios (e.g., game servers submitting thousands of scores per second), use Kafka instead of direct HTTP API calls.
+
+### Start Kafka
+
+```bash
+# Start Kafka with Docker Compose
+docker-compose up -d kafka
+
+# Wait for Kafka to be ready (topic is auto-created)
+docker-compose logs -f kafka
+```
+
+### Feed Data via Kafka
+
+Use the Kafka producer tool to feed scores:
+
+```bash
+# Build and run the Kafka producer
+go build -o bin/kafka-producer ./cmd/kafka-producer
+
+# Feed 1000 players with 100 updates/second
+./bin/kafka-producer -leaderboard game1 -players 1000 -rate 100
+
+# Or use the convenience script
+./scripts/kafka-feed.sh game1 1000 100
+```
+
+**Producer Options:**
+```
+-brokers    Kafka brokers (default: localhost:9094)
+-topic      Kafka topic (default: leaderboard-scores)
+-leaderboard Leaderboard ID (default: game1)
+-players    Total players to create (default: 1000)
+-rate       Updates per second (default: 100)
+-duration   Run duration, 0=forever (default: 0)
+-initial-only Only create initial players
+```
+
+### Kafka Message Format
+
+```json
+{
+  "player_id": "Phoenix1",
+  "leaderboard_id": "game1",
+  "score": 1500,
+  "game_id": "match123",
+  "metadata": {"level": 10}
+}
+```
+
+### When to Use Kafka vs HTTP API
+
+| Use Case | Recommended Path |
+|----------|-----------------|
+| Game server batch submissions | Kafka |
+| High-volume score updates | Kafka |
+| Single score submission | HTTP API |
+| Web client score updates | WebSocket |
+| Retrieving leaderboard | HTTP API / WebSocket |
 
 ## Project Structure
 
 ```
 leaderboard-redis/
 ├── cmd/
-│   └── server/
-│       └── main.go           # Application entry point
+│   ├── server/
+│   │   └── main.go           # Application entry point
+│   └── kafka-producer/
+│       └── main.go           # Kafka producer for testing
 ├── internal/
 │   ├── config/
 │   │   └── config.go         # Configuration loading
@@ -242,6 +367,8 @@ leaderboard-redis/
 │   │   ├── leaderboard.go    # Domain types
 │   │   ├── player.go         # Player types
 │   │   └── errors.go         # Custom errors
+│   ├── kafka/
+│   │   └── consumer.go       # Kafka consumer for score ingestion
 │   ├── redis/
 │   │   └── leaderboard.go    # Redis operations
 │   ├── postgres/
@@ -250,8 +377,15 @@ leaderboard-redis/
 │   │   └── leaderboard.go    # Business logic
 │   ├── handler/
 │   │   └── http.go           # HTTP handlers
+│   ├── websocket/
+│   │   ├── hub.go            # WebSocket hub
+│   │   └── client.go         # WebSocket client
 │   └── worker/
 │       └── sync.go           # Background sync worker
+├── scripts/
+│   ├── kafka-feed.sh         # Kafka data feeding script
+│   ├── feed-leaderboard.sh   # HTTP data feeding script
+│   └── battle-royale.sh      # Demo script
 ├── config.yaml               # Configuration file
 ├── docker-compose.yaml       # Docker Compose setup
 ├── Dockerfile                # Container build
@@ -305,6 +439,19 @@ Features:
 - Rank change animations
 - Auto-reconnect on disconnect
 
+## Makefile Commands
+
+All operations can be done via Makefile. See full documentation: **[docs/MAKEFILE_COMMANDS.md](docs/MAKEFILE_COMMANDS.md)**
+
+```bash
+make run                # Start everything (docker + server + webapp)
+make feed               # Feed 1000 players via Kafka
+make stop               # Stop everything
+make test-health        # Check all services health
+make status             # Show service status
+make logs               # View server logs
+```
+
 ## Real-time Demo
 
 For a complete demo with 1000 players and live updates, see:
@@ -314,12 +461,15 @@ For a complete demo with 1000 players and live updates, see:
 Quick start:
 ```bash
 # Start everything
-docker-compose up -d redis postgres
+docker-compose up -d redis postgres kafka
 go run ./cmd/server -config config.yaml &
 cd webapp && npm run dev -- --port 3000 &
 
-# Run battle royale demo (1000 players, constant changes)
+# Option 1: Feed via HTTP (battle royale script)
 ./scripts/battle-royale.sh
+
+# Option 2: Feed via Kafka (high-load simulation)
+./scripts/kafka-feed.sh game1 1000 500
 
 # Open http://localhost:3000 and watch!
 ```

@@ -13,6 +13,7 @@ type Config struct {
 	Server      ServerConfig      `yaml:"server"`
 	Redis       RedisConfig       `yaml:"redis"`
 	Postgres    PostgresConfig    `yaml:"postgres"`
+	Kafka       KafkaConfig       `yaml:"kafka"`
 	Sync        SyncConfig        `yaml:"sync"`
 	Leaderboard LeaderboardConfig `yaml:"leaderboard"`
 }
@@ -61,6 +62,18 @@ func (c *PostgresConfig) ConnectionString() string {
 		"postgres://%s:%s@%s:%d/%s?sslmode=%s",
 		c.User, c.Password, c.Host, c.Port, c.Database, sslMode,
 	)
+}
+
+// KafkaConfig holds Kafka connection configuration
+type KafkaConfig struct {
+	Brokers       []string      `yaml:"brokers"`
+	Topic         string        `yaml:"topic"`
+	GroupID       string        `yaml:"group_id"`
+	Enabled       bool          `yaml:"enabled"`
+	BatchSize     int           `yaml:"batch_size"`
+	BatchTimeout  time.Duration `yaml:"batch_timeout"`
+	RetryAttempts int           `yaml:"retry_attempts"`
+	RetryDelay    time.Duration `yaml:"retry_delay"`
 }
 
 // SyncConfig holds synchronization worker configuration
@@ -151,6 +164,29 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Postgres.MaxConnIdleTime == 0 {
 		c.Postgres.MaxConnIdleTime = 30 * time.Minute
+	}
+
+	// Kafka defaults
+	if len(c.Kafka.Brokers) == 0 {
+		c.Kafka.Brokers = []string{"localhost:9092"}
+	}
+	if c.Kafka.Topic == "" {
+		c.Kafka.Topic = "leaderboard-scores"
+	}
+	if c.Kafka.GroupID == "" {
+		c.Kafka.GroupID = "leaderboard-consumer"
+	}
+	if c.Kafka.BatchSize == 0 {
+		c.Kafka.BatchSize = 100
+	}
+	if c.Kafka.BatchTimeout == 0 {
+		c.Kafka.BatchTimeout = 1 * time.Second
+	}
+	if c.Kafka.RetryAttempts == 0 {
+		c.Kafka.RetryAttempts = 3
+	}
+	if c.Kafka.RetryDelay == 0 {
+		c.Kafka.RetryDelay = 1 * time.Second
 	}
 
 	// Sync defaults

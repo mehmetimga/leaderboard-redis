@@ -13,6 +13,7 @@ import (
 
 	"github.com/leaderboard-redis/internal/config"
 	"github.com/leaderboard-redis/internal/handler"
+	"github.com/leaderboard-redis/internal/kafka"
 	"github.com/leaderboard-redis/internal/postgres"
 	"github.com/leaderboard-redis/internal/redis"
 	"github.com/leaderboard-redis/internal/service"
@@ -106,6 +107,27 @@ func main() {
 		}
 	}
 
+	// Initialize Kafka consumer for high-load score ingestion
+	var kafkaConsumer *kafka.Consumer
+	if cfg.Kafka.Enabled {
+		logger.Info("initializing Kafka consumer",
+			"brokers", cfg.Kafka.Brokers,
+			"topic", cfg.Kafka.Topic,
+		)
+		var err error
+		kafkaConsumer, err = kafka.NewConsumer(&cfg.Kafka, leaderboardService, logger)
+		if err != nil {
+			logger.Warn("failed to create Kafka consumer, continuing without Kafka", "error", err)
+		} else {
+			if err := kafkaConsumer.Start(); err != nil {
+				logger.Warn("failed to start Kafka consumer, continuing without Kafka", "error", err)
+				kafkaConsumer = nil
+			} else {
+				logger.Info("Kafka consumer started successfully")
+			}
+		}
+	}
+
 	// Initialize HTTP handler with WebSocket hub
 	httpHandler := handler.NewHandler(leaderboardService, wsHub, logger)
 
@@ -141,6 +163,13 @@ func main() {
 
 	// Stop WebSocket hub
 	wsHub.Stop()
+
+	// Stop Kafka consumer
+	if kafkaConsumer != nil {
+		if err := kafkaConsumer.Stop(); err != nil {
+			logger.Error("failed to stop Kafka consumer", "error", err)
+		}
+	}
 
 	// Stop sync worker
 	if err := syncWorker.Stop(); err != nil {

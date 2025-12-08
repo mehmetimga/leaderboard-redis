@@ -26,6 +26,17 @@ postgres:
   max_conn_lifetime: 1h
   max_conn_idle_time: 30m
 
+kafka:
+  brokers:
+    - "localhost:9094"
+  topic: "leaderboard-scores"
+  group_id: "leaderboard-consumer"
+  enabled: true
+  batch_size: 100
+  batch_timeout: 1s
+  retry_attempts: 3
+  retry_delay: 1s
+
 sync:
   interval: 30m
   batch_size: 1000
