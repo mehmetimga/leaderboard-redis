@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.21-alpine AS builder
+FROM golang:1.23-alpine AS builder
 
 WORKDIR /app
 
@@ -29,10 +29,11 @@ RUN apk --no-cache add ca-certificates
 # Copy binary from builder
 COPY --from=builder /app/server .
 COPY --from=builder /app/config.yaml .
+COPY --from=builder /app/config.docker.yaml .
 
 # Expose port
 EXPOSE 8080
 
 # Run the application
-CMD ["./server", "-config", "config.yaml"]
+CMD ["./server", "-config", "config.docker.yaml"]
 

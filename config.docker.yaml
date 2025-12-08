@@ -1,0 +1,36 @@
+server:
+  port: 8080
+  read_timeout: 5s
+  write_timeout: 10s
+  idle_timeout: 120s
+
+redis:
+  addr: "${REDIS_ADDR}"
+  password: ""
+  db: 0
+  pool_size: 100
+  min_idle_conns: 10
+  dial_timeout: 5s
+  read_timeout: 3s
+  write_timeout: 3s
+
+postgres:
+  host: "${POSTGRES_HOST}"
+  port: ${POSTGRES_PORT}
+  user: "${POSTGRES_USER}"
+  password: "${POSTGRES_PASSWORD}"
+  database: "${POSTGRES_DB}"
+  ssl_mode: disable
+  max_connections: 50
+  min_connections: 5
+  max_conn_lifetime: 1h
+  max_conn_idle_time: 30m
+
+sync:
+  interval: 30m
+  batch_size: 1000
+  enabled: true
+
+leaderboard:
+  default_limit: 100
+  max_limit: 1000
